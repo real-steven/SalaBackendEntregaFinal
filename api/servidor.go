@@ -33,9 +33,6 @@ func InicializarServidor() *gin.Engine {
 	router.GET("/servicios/:id", ObtenerServicio)
 	router.GET("/productos", ListarProductos)
 	router.GET("/productos/:id", ObtenerProducto)
-	router.POST("/productos", CrearProducto)
-	router.PUT("/productos/:id", ActualizarProducto)
-	router.DELETE("/productos/:id", EliminarProducto)
 
 	// =====================
 	// RUTAS PROTEGIDAS (requieren token)
@@ -44,7 +41,19 @@ func InicializarServidor() *gin.Engine {
 	autorizado := router.Group("/")
 	autorizado.Use(Autenticar())
 
-	// Citas protegidas
+	// LISTADOS ESPECÍFICOS DE CITAS (antes que las genéricas)
+	autorizado.GET("/citas/usuarios", ListarCitasUsuarios)
+	autorizado.GET("/citas/invitados", ListarCitasInvitados)
+
+	// RUTAS DE FACTURAS CON PREFIJO DIFERENTE
+	autorizado.POST("/cita/:id/finalizar", FinalizarCita)
+	autorizado.POST("/cita/:id/factura", GenerarFacturaDesdeCita)
+	autorizado.GET("/cita/:id/factura", ObtenerFacturaPorCita)
+	autorizado.GET("/facturas", ListarFacturas)
+	autorizado.GET("/facturas/:id", ObtenerFactura)
+	autorizado.GET("/facturas/:id/pdf", DescargarFacturaPDF)
+
+	// Citas protegidas (rutas genéricas)
 	autorizado.POST("/citas", CrearCita)
 	autorizado.GET("/citas/:id", ObtenerCita)
 	autorizado.PUT("/citas/:id", ActualizarCita)
@@ -57,6 +66,11 @@ func InicializarServidor() *gin.Engine {
 	autorizado.PUT("/servicios/:id", ActualizarServicio)
 	autorizado.DELETE("/servicios/:id", EliminarServicio)
 
+	// Productos protegidos (solo admin)
+	autorizado.POST("/productos", CrearProducto)
+	autorizado.PUT("/productos/:id", ActualizarProducto)
+	autorizado.DELETE("/productos/:id", EliminarProducto)
+
 	// Reportes, notificaciones y perfil
 	autorizado.POST("/notificaciones/:id", EnviarNotificacion)
 	autorizado.GET("/reporte/citas-por-fechas", ReporteCitasPorFechas)
@@ -65,13 +79,14 @@ func InicializarServidor() *gin.Engine {
 
 	// Admin puede registrar usuarios
 	autorizado.POST("/admin/usuarios", RegistrarUsuarioComoAdmin)
+	autorizado.GET("/usuarios", ListarUsuarios)
 
-	// NUEVOS LISTADOS DE CITAS (usuarios + invitados)
-	autorizado.GET("/citas/usuarios", ListarCitasUsuarios)
-	autorizado.GET("/citas/invitados", ListarCitasInvitados)
-
-	// Facturación pública (por ahora)
-	router.GET("/facturas/:id", GenerarFacturaPDF)
+	// Nuevas funcionalidades con triggers
+	autorizado.GET("/alertas/inventario", ObtenerAlertasInventario)
+	autorizado.PUT("/alertas/inventario/:id/resolver", ResolverAlertaInventario)
+	autorizado.GET("/auditoria/usuarios", ObtenerAuditoriaUsuarios)
+	autorizado.GET("/estadisticas/clientes", ObtenerEstadisticasClientes)
+	autorizado.GET("/historial/precios-servicios", ObtenerHistorialPreciosServicios)
 
 	return router
 }

@@ -1,0 +1,12 @@
+Resumen de procesos almacenados para SQL Server:
+
+1. CrearCita: Inserta una nueva cita en la tabla 'citas' con usuario, servicio, fecha y estado.
+2. CancelarCita: Actualiza el estado de una cita a 'cancelada' y guarda el motivo de cancelación.
+3. ConfirmarCita: Cambia el estado de una cita a 'confirmada'.
+4. RechazarCita: Cambia el estado de una cita a 'rechazada'.
+5. ObtenerCitasPorUsuario: Devuelve todas las citas asociadas a un usuario específico.
+6. CrearUsuario: Inserta un nuevo usuario con nombre, correo, cédula, contraseña y rol.
+7. CrearServicio: Inserta un nuevo servicio con nombre, descripción y precio.
+8. CrearProducto: Inserta un nuevo producto con nombre, descripción, precio, imagen y cantidad disponible.
+
+Cada proceso almacenado está diseñado para facilitar las operaciones principales de tu backend, asegurando integridad y eficiencia en la gestión de datos.

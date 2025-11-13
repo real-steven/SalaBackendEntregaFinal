@@ -40,7 +40,7 @@ func CancelarCita(c *gin.Context) {
 	// 🕒 Obtener cita
 	var fechaHora time.Time
 	var dueñoID sql.NullInt64
-	err := dto.DB.QueryRow("SELECT fecha_hora, usuario_id FROM citas WHERE id=?", id).Scan(&fechaHora, &dueñoID)
+	err := dto.DB.QueryRow("SELECT fecha_hora, usuario_id FROM citas WHERE id=@id", sql.Named("id", id)).Scan(&fechaHora, &dueñoID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Cita no encontrada"})
 		return
@@ -57,7 +57,9 @@ func CancelarCita(c *gin.Context) {
 
 	// Admin puede cancelar siempre
 	if rol == "admin" {
-		_, err := dto.DB.Exec("UPDATE citas SET estado='cancelada', cancelacion_motivo=? WHERE id=?", input.Motivo, id)
+		_, err := dto.DB.Exec("UPDATE citas SET estado='cancelada', cancelacion_motivo=@motivo WHERE id=@id",
+			sql.Named("motivo", input.Motivo),
+			sql.Named("id", id))
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error al cancelar cita"})
 			return
@@ -72,7 +74,9 @@ func CancelarCita(c *gin.Context) {
 			c.JSON(http.StatusForbidden, gin.H{"error": "Solo puede cancelar con al menos 12h de antelación"})
 			return
 		}
-		_, err := dto.DB.Exec("UPDATE citas SET estado='cancelada', cancelacion_motivo=? WHERE id=?", input.Motivo, id)
+		_, err := dto.DB.Exec("UPDATE citas SET estado='cancelada', cancelacion_motivo=@motivo WHERE id=@id",
+			sql.Named("motivo", input.Motivo),
+			sql.Named("id", id))
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error al cancelar cita"})
 			return
@@ -96,7 +100,7 @@ func ConfirmarCita(c *gin.Context) {
 
 	// Verificar que la cita exista y esté pendiente
 	var estado string
-	err := dto.DB.QueryRow("SELECT estado FROM citas WHERE id = ?", id).Scan(&estado)
+	err := dto.DB.QueryRow("SELECT estado FROM citas WHERE id = @id", sql.Named("id", id)).Scan(&estado)
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Cita no encontrada"})
 		return
@@ -110,7 +114,7 @@ func ConfirmarCita(c *gin.Context) {
 	}
 
 	// Actualizamos directamente a confirmada SIN asignar empleado
-	_, err = dto.DB.Exec("UPDATE citas SET estado='confirmada' WHERE id=?", id)
+	_, err = dto.DB.Exec("UPDATE citas SET estado='confirmada' WHERE id=@id", sql.Named("id", id))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error al confirmar cita"})
 		return
@@ -130,7 +134,7 @@ func RechazarCita(c *gin.Context) {
 
 	// Verificar que la cita exista y esté pendiente
 	var estado string
-	err := dto.DB.QueryRow("SELECT estado FROM citas WHERE id = ?", id).Scan(&estado)
+	err := dto.DB.QueryRow("SELECT estado FROM citas WHERE id = @id", sql.Named("id", id)).Scan(&estado)
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Cita no encontrada"})
 		return
@@ -144,7 +148,7 @@ func RechazarCita(c *gin.Context) {
 	}
 
 	// Realizar el update para rechazar la cita
-	_, err = dto.DB.Exec("UPDATE citas SET estado='rechazada' WHERE id=?", id)
+	_, err = dto.DB.Exec("UPDATE citas SET estado='rechazada' WHERE id=@id", sql.Named("id", id))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error al rechazar cita"})
 		return
@@ -175,7 +179,7 @@ func MisCitasCliente(c *gin.Context) {
 	if rol == "admin" {
 		rows, err = dto.DB.Query(query + " ORDER BY c.fecha_hora DESC")
 	} else {
-		rows, err = dto.DB.Query(query+" WHERE c.usuario_id = ? ORDER BY c.fecha_hora DESC", usuarioID)
+		rows, err = dto.DB.Query(query+" WHERE c.usuario_id = @usuario_id ORDER BY c.fecha_hora DESC", sql.Named("usuario_id", usuarioID))
 	}
 
 	if err != nil {
@@ -237,30 +241,40 @@ func MisCitasCliente(c *gin.Context) {
 func CrearCita(c *gin.Context) {
 	var input CrearCitaInput
 	if err := c.ShouldBindJSON(&input); err != nil {
+		fmt.Println("❌ Error al bindear JSON en CrearCita:", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Datos inválidos"})
 		return
 	}
 
+	fmt.Printf("✅ Datos recibidos en CrearCita - ServicioID: %d, FechaHora: %s\n", input.ServicioID, input.FechaHora)
+
 	// Verificar que la fecha no esté en el pasado
 	if input.FechaHora.Before(time.Now()) {
+		fmt.Println("❌ Error: La fecha está en el pasado")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "La fecha debe ser futura"})
 		return
 	}
 
 	// Verificar que el servicio exista
 	var exists int
-	err := dto.DB.QueryRow("SELECT COUNT(*) FROM servicios WHERE id = ?", input.ServicioID).Scan(&exists)
+	err := dto.DB.QueryRow("SELECT COUNT(*) FROM servicios WHERE id = @id", sql.Named("id", input.ServicioID)).Scan(&exists)
 	if err != nil || exists == 0 {
+		fmt.Printf("❌ Error: El servicio %d no existe o error en consulta: %v\n", input.ServicioID, err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "El servicio no existe"})
 		return
 	}
 
 	usuarioID, _ := c.Get("usuarioID")
+	fmt.Printf("✅ UsuarioID obtenido del token: %v\n", usuarioID)
 
-	_, err = dto.DB.Exec("INSERT INTO citas (usuario_id, servicio_id, fecha_hora, estado) VALUES (?, ?, ?, ?)",
-		usuarioID, input.ServicioID, input.FechaHora, "pendiente")
+	_, err = dto.DB.Exec("INSERT INTO citas (usuario_id, servicio_id, fecha_hora, estado) VALUES (@usuario_id, @servicio_id, @fecha_hora, @estado)",
+		sql.Named("usuario_id", usuarioID),
+		sql.Named("servicio_id", input.ServicioID),
+		sql.Named("fecha_hora", input.FechaHora),
+		sql.Named("estado", "pendiente"))
 
 	if err != nil {
+		fmt.Println("❌ Error al insertar cita en la base de datos:", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error al crear cita"})
 		return
 	}
@@ -279,7 +293,7 @@ func ObtenerCita(c *gin.Context) {
 		Estado     string    `json:"estado"`
 	}
 
-	err := dto.DB.QueryRow("SELECT id, usuario_id, servicio_id, fecha_hora, estado FROM citas WHERE id = ?", id).
+	err := dto.DB.QueryRow("SELECT id, usuario_id, servicio_id, fecha_hora, estado FROM citas WHERE id = @id", sql.Named("id", id)).
 		Scan(&cita.ID, &cita.UsuarioID, &cita.ServicioID, &cita.FechaHora, &cita.Estado)
 
 	if err != nil {
@@ -331,9 +345,13 @@ func ActualizarCita(c *gin.Context) {
 	// Ejecutar actualización
 	_, err := dto.DB.Exec(`
 		UPDATE citas 
-		SET servicio_id=?, fecha_hora=?, estado=?, empleado_id=?
-		WHERE id=?`,
-		input.ServicioID, input.FechaHora, input.Estado, input.EmpleadoID, id,
+		SET servicio_id=@servicio_id, fecha_hora=@fecha_hora, estado=@estado, empleado_id=@empleado_id
+		WHERE id=@id`,
+		sql.Named("servicio_id", input.ServicioID),
+		sql.Named("fecha_hora", input.FechaHora),
+		sql.Named("estado", input.Estado),
+		sql.Named("empleado_id", input.EmpleadoID),
+		sql.Named("id", id),
 	)
 
 	if err != nil {
@@ -355,10 +373,11 @@ func CrearCitaInvitado(c *gin.Context) {
 
 	if err := c.ShouldBindJSON(&input); err != nil {
 		fmt.Println("❌ Error al bindear JSON:", err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Datos inválidos"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Datos inválidos", "detalle": err.Error()})
 		return
 	}
 
+	fmt.Printf("Recibido servicio_id: %v\n", input.ServicioID)
 	if input.Nombre == "" || input.Cedula == "" || input.Telefono == "" || input.FechaHora == "" || input.ServicioID == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Todos los campos son obligatorios"})
 		return
@@ -379,7 +398,7 @@ func CrearCitaInvitado(c *gin.Context) {
 
 	// Verificar que el servicio existe
 	var exists int
-	err = dto.DB.QueryRow("SELECT COUNT(*) FROM servicios WHERE id = ?", input.ServicioID).Scan(&exists)
+	err = dto.DB.QueryRow("SELECT COUNT(*) FROM servicios WHERE id = @id", sql.Named("id", input.ServicioID)).Scan(&exists)
 	if err != nil || exists == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "El servicio no existe"})
 		return
@@ -388,8 +407,13 @@ func CrearCitaInvitado(c *gin.Context) {
 	// Insertar la cita
 	_, err = dto.DB.Exec(`
 		INSERT INTO citas (servicio_id, fecha_hora, estado, nombre_invitado, cedula_invitado, telefono_invitado)
-		VALUES (?, ?, 'pendiente', ?, ?, ?)`,
-		input.ServicioID, fechaHora, input.Nombre, input.Cedula, input.Telefono)
+		VALUES (@servicio_id, @fecha_hora, 'pendiente', @nombre, @cedula, @telefono)`,
+		sql.Named("servicio_id", input.ServicioID),
+		sql.Named("fecha_hora", fechaHora),
+		sql.Named("nombre", input.Nombre),
+		sql.Named("cedula", input.Cedula),
+		sql.Named("telefono", input.Telefono),
+	)
 
 	if err != nil {
 		fmt.Println("❌ Error al insertar en la base de datos:", err)
@@ -412,15 +436,17 @@ func ListarCitasUsuarios(c *gin.Context) {
 	queryUsuarios := `
 		SELECT c.id, c.servicio_id, c.fecha_hora, c.estado, c.empleado_id,
 		       c.creado_en, c.actualizado_en, s.nombre AS nombre_servicio,
-		       s.precio, u.cedula, u.nombre AS nombre_cliente, u.correo, u.telefono
+		       s.precio, u.cedula, u.nombre AS nombre_cliente, u.correo
 		FROM citas c
 		JOIN servicios s ON c.servicio_id = s.id
 		JOIN usuarios u ON c.usuario_id = u.id
+		WHERE c.usuario_id IS NOT NULL
 		ORDER BY c.fecha_hora DESC
 	`
 
 	rowsUsuarios, err := dto.DB.Query(queryUsuarios)
 	if err != nil {
+		fmt.Println("❌ Error al ejecutar query de citas de usuarios:", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error al obtener citas de usuarios"})
 		return
 	}
@@ -434,12 +460,13 @@ func ListarCitasUsuarios(c *gin.Context) {
 			creadoEn, actualizadoEn               sql.NullTime
 			nombreServicio, nombreCliente, cedula string
 			precio                                float64
-			correo, telefono                      sql.NullString
+			correo                                sql.NullString
 		)
 
 		err := rowsUsuarios.Scan(&id, &servicioID, &fechaHora, &estado, &empleadoID,
-			&creadoEn, &actualizadoEn, &nombreServicio, &precio, &cedula, &nombreCliente, &correo, &telefono)
+			&creadoEn, &actualizadoEn, &nombreServicio, &precio, &cedula, &nombreCliente, &correo)
 		if err != nil {
+			fmt.Println("❌ Error en Scan de citas de usuarios:", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error al procesar citas de usuarios"})
 			return
 		}
@@ -454,10 +481,9 @@ func ListarCitasUsuarios(c *gin.Context) {
 				"precio": precio,
 			},
 			"cliente": map[string]interface{}{
-				"nombre":   nombreCliente,
-				"cedula":   cedula,
-				"correo":   nullStringToString(correo),
-				"telefono": nullStringToString(telefono),
+				"nombre": nombreCliente,
+				"cedula": cedula,
+				"correo": nullStringToString(correo),
 			},
 			"creado_en":      creadoEn.Time,
 			"actualizado_en": actualizadoEn.Time,
@@ -549,7 +575,7 @@ func CancelarCitaConMotivo(c *gin.Context) {
 
 	// Verificar que la cita exista y esté pendiente o confirmada
 	var estado string
-	err := dto.DB.QueryRow("SELECT estado FROM citas WHERE id = ?", id).Scan(&estado)
+	err := dto.DB.QueryRow("SELECT estado FROM citas WHERE id = @id", sql.Named("id", id)).Scan(&estado)
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Cita no encontrada"})
 		return
@@ -564,8 +590,10 @@ func CancelarCitaConMotivo(c *gin.Context) {
 
 	// Cancelar cita y registrar el motivo
 	_, err = dto.DB.Exec(
-		"UPDATE citas SET estado = ?, cancelacion_motivo = ?, actualizado_en = NOW() WHERE id = ?",
-		"cancelada", datos.Motivo, id,
+		"UPDATE citas SET estado = @estado, cancelacion_motivo = @motivo, actualizado_en = GETDATE() WHERE id = @id",
+		sql.Named("estado", "cancelada"),
+		sql.Named("motivo", datos.Motivo),
+		sql.Named("id", id),
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "No se pudo cancelar la cita"})
@@ -585,11 +613,11 @@ func ObtenerUltimaCitaInvitado(c *gin.Context) {
 	query := `
         SELECT id, servicio_id, fecha_hora, estado, nombre_invitado, telefono_invitado
         FROM citas
-        WHERE cedula_invitado = ?
+        WHERE cedula_invitado = @cedula
         ORDER BY fecha_hora DESC
-        LIMIT 1`
+        OFFSET 0 ROWS FETCH NEXT 1 ROWS ONLY`
 
-	err := dto.DB.QueryRow(query, cedula).Scan(&cita.ID, &cita.ServicioID, &cita.FechaHora, &cita.Estado, &cita.NombreInvitado, &cita.TelefonoInvitado)
+	err := dto.DB.QueryRow(query, sql.Named("cedula", cedula)).Scan(&cita.ID, &cita.ServicioID, &cita.FechaHora, &cita.Estado, &cita.NombreInvitado, &cita.TelefonoInvitado)
 
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, gin.H{"error": "No se encontró ninguna cita para esta cédula"})
@@ -609,9 +637,9 @@ func UltimaCitaCliente(c *gin.Context) {
         SELECT c.id, c.servicio_id, c.fecha_hora, c.estado, s.nombre, s.precio
         FROM citas c
         JOIN servicios s ON c.servicio_id = s.id
-        WHERE c.usuario_id = ?
+        WHERE c.usuario_id = @usuario_id
         ORDER BY c.fecha_hora DESC
-        LIMIT 1`
+        OFFSET 0 ROWS FETCH NEXT 1 ROWS ONLY`
 
 	var (
 		citaID, servicioID int
@@ -620,7 +648,7 @@ func UltimaCitaCliente(c *gin.Context) {
 		precio             float64
 	)
 
-	err := dto.DB.QueryRow(query, usuarioID).Scan(&citaID, &servicioID, &fechaHora, &estado, &nombreServicio, &precio)
+	err := dto.DB.QueryRow(query, sql.Named("usuario_id", usuarioID)).Scan(&citaID, &servicioID, &fechaHora, &estado, &nombreServicio, &precio)
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, gin.H{"error": "No tiene citas registradas"})
 		return
@@ -649,11 +677,11 @@ func ObtenerCitasPorCedulaInvitado(c *gin.Context) {
 		SELECT c.id, c.fecha_hora, c.estado, c.servicio_id, 
 		       c.nombre_invitado, c.cedula_invitado, c.telefono_invitado
 		FROM citas c
-		WHERE c.cedula_invitado = ?
+		WHERE c.cedula_invitado = @cedula
 		ORDER BY c.fecha_hora DESC
 	`
 
-	rows, err := dto.DB.Query(query, cedula)
+	rows, err := dto.DB.Query(query, sql.Named("cedula", cedula))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error al consultar citas"})
 		return
@@ -688,4 +716,38 @@ func ObtenerCitasPorCedulaInvitado(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, citas)
+}
+
+// FinalizarCita - Cambiar estado de cita a finalizada (solo admin/empleado)
+func FinalizarCita(c *gin.Context) {
+	rol, _ := c.Get("rol")
+	if rol != "admin" && rol != "empleado" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Solo administradores y empleados pueden finalizar citas"})
+		return
+	}
+
+	citaID := c.Param("id")
+
+	// Verificar que la cita esté confirmada
+	var estadoActual string
+	err := dto.DB.QueryRow("SELECT estado FROM citas WHERE id = @id", sql.Named("id", citaID)).Scan(&estadoActual)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Cita no encontrada"})
+		return
+	}
+
+	if estadoActual != "confirmada" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Solo se pueden finalizar citas confirmadas"})
+		return
+	}
+
+	// Actualizar estado a finalizada
+	_, err = dto.DB.Exec("UPDATE citas SET estado = 'finalizada', actualizado_en = GETDATE() WHERE id = @id", sql.Named("id", citaID))
+	if err != nil {
+		fmt.Printf("Error al finalizar cita: %v\n", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error al finalizar cita"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"mensaje": "Cita finalizada correctamente"})
 }

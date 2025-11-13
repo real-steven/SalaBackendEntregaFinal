@@ -4,21 +4,36 @@ package dto
 
 import (
 	"database/sql"
+	"fmt"
 	"log"
+	"os"
 
-	_ "github.com/go-sql-driver/mysql"
+	_ "github.com/denisenkom/go-mssqldb"
 )
 
 var DB *sql.DB
 
+// Conecta a Azure SQL Database usando SQL Server Authentication
 func ConectarBaseDatos() {
 	var err error
-	DB, err = sql.Open("mysql", "root:@tcp(127.0.0.1:3306)/salonbelleza?charset=utf8mb4&parseTime=True&loc=Local")
+	
+	// Obtener la contraseña de variables de entorno
+	password := os.Getenv("AZURE_DB_PASSWORD")
+	if password == "" {
+		log.Fatal("Variable de entorno AZURE_DB_PASSWORD no está configurada")
+	}
+	
+	// String de conexión para Azure SQL Database
+	connString := fmt.Sprintf("server=salabelleza.database.windows.net;port=1433;database=salonbelleza;user id=AdminSteven;password=%s;encrypt=true;TrustServerCertificate=false", password)
+	DB, err = sql.Open("sqlserver", connString)
 	if err != nil {
-		log.Fatal("Error al conectar la base de datos:", err)
+		log.Printf("Error al conectar a SQL Server: %v", err)
+		return
 	}
 	err = DB.Ping()
 	if err != nil {
-		log.Fatal("No se pudo hacer ping a la base de datos:", err)
+		log.Printf("No se pudo hacer ping a SQL Server: %v", err)
+		return
 	}
+	fmt.Println("Conexión a SQL Server exitosa.")
 }

@@ -3,6 +3,7 @@
 package api
 
 import (
+	"database/sql"
 	"fmt"
 	"net/http"
 	"restapi/dto"
@@ -21,25 +22,36 @@ func RegistrarUsuario(c *gin.Context) {
 		Nombre     string `json:"nombre"`
 		Correo     string `json:"correo"`
 		Cedula     string `json:"cedula"`
+		Telefono   string `json:"telefono"`
 		Contrasena string `json:"contrasena"`
 	}
 
 	if err := c.ShouldBindJSON(&usuario); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		fmt.Println("Error al bindear JSON:", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Datos inválidos", "detalle": err.Error()})
 		return
 	}
 
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(usuario.Contrasena), bcrypt.DefaultCost)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error al encriptar contraseña"})
+		fmt.Println("Error al hashear contraseña:", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error al procesar la contraseña", "detalle": err.Error()})
 		return
 	}
 
-	_, err = dto.DB.Exec("INSERT INTO usuarios(nombre, correo, cedula, contrasena, rol) VALUES(?, ?, ?, ?, ?)",
-		usuario.Nombre, usuario.Correo, usuario.Cedula, string(hashedPassword), "cliente")
+	_, err = dto.DB.Exec(
+		"INSERT INTO usuarios(nombre, correo, cedula, telefono, contrasena, rol) VALUES(@nombre, @correo, @cedula, @telefono, @contrasena, @rol)",
+		sql.Named("nombre", usuario.Nombre),
+		sql.Named("correo", usuario.Correo),
+		sql.Named("cedula", usuario.Cedula),
+		sql.Named("telefono", usuario.Telefono),
+		sql.Named("contrasena", string(hashedPassword)),
+		sql.Named("rol", "cliente"),
+	)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error al registrar usuario"})
+		fmt.Println("Error al ejecutar INSERT usuarios:", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error al registrar usuario", "detalle": err.Error()})
 		return
 	}
 
@@ -59,7 +71,7 @@ func LoginUsuario(c *gin.Context) {
 	}
 
 	var usuario dto.Usuario
-	err := dto.DB.QueryRow("SELECT id, nombre, contrasena, rol FROM usuarios WHERE correo=?", input.Correo).
+	err := dto.DB.QueryRow("SELECT id, nombre, contrasena, rol FROM usuarios WHERE correo=@correo", sql.Named("correo", input.Correo)).
 		Scan(&usuario.ID, &usuario.Nombre, &usuario.Contrasena, &usuario.Rol)
 
 	if err != nil {
@@ -110,6 +122,7 @@ func RegistrarUsuarioComoAdmin(c *gin.Context) {
 		Nombre     string `json:"nombre"`
 		Correo     string `json:"correo"`
 		Cedula     string `json:"cedula"`
+		Telefono   string `json:"telefono"`
 		Contrasena string `json:"contrasena"`
 		Rol        string `json:"rol"` // cliente, empleado, admin
 	}
@@ -131,9 +144,14 @@ func RegistrarUsuarioComoAdmin(c *gin.Context) {
 	}
 
 	_, err = dto.DB.Exec(`
-		INSERT INTO usuarios (nombre, correo, cedula, contrasena, rol)
-		VALUES (?, ?, ?, ?, ?)`,
-		input.Nombre, input.Correo, input.Cedula, string(hashedPassword), input.Rol)
+		INSERT INTO usuarios (nombre, correo, cedula, telefono, contrasena, rol)
+		VALUES (@nombre, @correo, @cedula, @telefono, @contrasena, @rol)`,
+		sql.Named("nombre", input.Nombre),
+		sql.Named("correo", input.Correo),
+		sql.Named("cedula", input.Cedula),
+		sql.Named("telefono", input.Telefono),
+		sql.Named("contrasena", string(hashedPassword)),
+		sql.Named("rol", input.Rol))
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "No se pudo crear el usuario"})
@@ -148,15 +166,16 @@ func VerMiPerfil(c *gin.Context) {
 	usuarioID, _ := c.Get("usuarioID")
 
 	var usuario struct {
-		ID     int32  `json:"id"`
-		Nombre string `json:"nombre"`
-		Correo string `json:"correo"`
-		Cedula string `json:"cedula"`
-		Rol    string `json:"rol"`
+		ID       int32  `json:"id"`
+		Nombre   string `json:"nombre"`
+		Correo   string `json:"correo"`
+		Cedula   string `json:"cedula"`
+		Telefono string `json:"telefono"`
+		Rol      string `json:"rol"`
 	}
 
-	err := dto.DB.QueryRow("SELECT id, nombre, correo, cedula, rol FROM usuarios WHERE id = ?", usuarioID).
-		Scan(&usuario.ID, &usuario.Nombre, &usuario.Correo, &usuario.Cedula, &usuario.Rol)
+	err := dto.DB.QueryRow("SELECT id, nombre, correo, cedula, telefono, rol FROM usuarios WHERE id = @id", sql.Named("id", usuarioID)).
+		Scan(&usuario.ID, &usuario.Nombre, &usuario.Correo, &usuario.Cedula, &usuario.Telefono, &usuario.Rol)
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "No se pudo obtener el perfil"})
@@ -164,4 +183,60 @@ func VerMiPerfil(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, usuario)
+}
+
+// ListarUsuarios - Obtener lista de usuarios/clientes usando stored procedure
+func ListarUsuarios(c *gin.Context) {
+	fmt.Println("=== INICIO ListarUsuarios ===")
+
+	// Verificar permisos (solo admin y empleados pueden ver lista completa)
+	rol, _ := c.Get("rol")
+	if rol != "admin" && rol != "empleado" {
+		fmt.Printf("Acceso denegado - Rol: %v", rol)
+		c.JSON(http.StatusForbidden, gin.H{"error": "Solo administradores o empleados pueden listar usuarios"})
+		return
+	}
+
+	// Ejecutar stored procedure ListarUsuarios
+	query := "EXEC ListarUsuarios"
+	fmt.Printf("Ejecutando query: %s", query)
+
+	rows, err := dto.DB.Query(query)
+	if err != nil {
+		fmt.Printf("Error ejecutando stored procedure ListarUsuarios: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error al obtener usuarios", "detalle": err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	var usuarios []gin.H
+
+	for rows.Next() {
+		var id int
+		var nombre, correo, cedula, contrasena, rol string
+		var creadoEn, actualizadoEn sql.NullTime
+
+		// El SP devuelve: id, nombre, correo, cedula, contrasena, rol, creado_en, actualizado_en
+		err := rows.Scan(&id, &nombre, &correo, &cedula, &contrasena, &rol, &creadoEn, &actualizadoEn)
+		if err != nil {
+			fmt.Printf("Error al escanear fila: %v", err)
+			continue
+		}
+
+		// Solo incluir información segura (sin contraseña)
+		usuario := gin.H{
+			"id":        id,
+			"nombre":    nombre,
+			"correo":    correo,
+			"cedula":    cedula,
+			"rol":       rol,
+			"creado_en": creadoEn.Time,
+		}
+
+		usuarios = append(usuarios, usuario)
+	}
+
+	fmt.Printf("Usuarios listados exitosamente - Total: %d", len(usuarios))
+
+	c.JSON(http.StatusOK, usuarios)
 }
